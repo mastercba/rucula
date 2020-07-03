@@ -1,6 +1,7 @@
 # Imports
 import time
 import json
+from time import sleep
 
 # Setup logging.
 try:
@@ -72,8 +73,12 @@ class Modem(object):
         MODEM_RST_PIN_OBJ.value(1)
         MODEM_POWER_ON_PIN_OBJ.value(1)
 
+        # Status setup
+        sleep(10)
+        MODEM_PWKEY_PIN_OBJ.value(1)
+
         # Setup UART
-        self.uart = UART(1, 9600, timeout=1000, rx=self.MODEM_TX_PIN, tx=self.MODEM_RX_PIN)
+        self.uart = UART(1, 4800, timeout=1000, rx=self.MODEM_TX_PIN, tx=self.MODEM_RX_PIN)
 
         # Test AT commands
         retries = 0
@@ -84,7 +89,7 @@ class Modem(object):
                 retries+=1
                 if retries < 3:
                     logger.debug('Error in getting modem info, retrying.. (#{})'.format(retries))
-                    time.sleep(3)
+                    time.sleep(5)
                 else:
                     raise
             else:
@@ -103,13 +108,24 @@ class Modem(object):
 
         # Commands dictionary. Not the best approach ever, but works nicely.
         commands = {
-                    'cntpcid':    {'string':'AT+CNTPCID=1', 'timeout':3, 'end': 'OK'},
+                    'atcscs':     {'string':'AT+CSCS="GSM"', 'timeout':5, 'end': 'OK'},
+                    'atcsmp':     {'string':'AT+CSMP=17,167,0,241', 'timeout':5, 'end': 'OK'},
+                    'atcmgs':     {'string':'AT+CMGS="+59169496560"', 'timeout':10, 'end': 'OK'},
+                    #'msg2snd':    {'string':'"{}"'.format(send2cell), 'timeout':5, 'end': 'OK'},
+                    'msg2snd':    {'string':'"hola"', 'timeout':5, 'end': 'OK'},
+                    'terminator': {'string':'0x1A', 'timeout':5, 'end': 'OK'},
+                    'cmgllistmsg':{'string':'AT+CMGL', 'timeout':5, 'end': 'OK'},
+                    'cgmfuno':    {'string':'AT+CMGF=1', 'timeout':5, 'end': 'OK'},
+                    'cmgrrtrvsms':{'string':'AT+CMGR=1', 'timeout':5, 'end': 'OK'},
+                    'cmgddelsms': {'string':'AT+CMGD=1,4', 'timeout':5, 'end': 'OK'},
+                    'cnmiid':     {'string':'AT+CNMI=2,1', 'timeout':5, 'end': 'OK'},
+                    'cntpcid':    {'string':'AT+CNTPCID=1', 'timeout':5, 'end': 'OK'},
                     'cntpip':     {'string':'AT+CNTP= "88.147.254.227",-16', 'timeout':5, 'end': 'OK'},
                     'cntpask':    {'string':'AT+CNTP?', 'timeout':5, 'end': 'OK'},
                     'cntpalone':  {'string':'AT+CNTP', 'timeout':5, 'end': 'OK'},
                     'clts1':      {'string':'AT+CLTS=1', 'timeout':5, 'end': 'OK'},
                     'ceng3':      {'string':'AT+CENG=3', 'timeout':5, 'end': 'OK'},
-                    'readclk':    {'string':'AT+CCLK?', 'timeout':3, 'end': 'OK'},
+                    'readclk':    {'string':'AT+CCLK?', 'timeout':5, 'end': 'OK'},
                     'modeminfo':  {'string':'ATI', 'timeout':3, 'end': 'OK'},
                     'fwrevision': {'string':'AT+CGMR', 'timeout':3, 'end': 'OK'},
                     'battery':    {'string':'AT+CBC', 'timeout':3, 'end': 'OK'},
@@ -279,12 +295,77 @@ class Modem(object):
         self.execute_at_command('cntpalone')
         self.execute_at_command('clts1')
 
-
 # time&date
     def get_time_date(self): 
         output = self.execute_at_command('readclk')
         #netwrkTIME = output.split(',',1)
         return output
+    
+# Set CNMI to send a  +CMTI notification if SMS is recved 
+    def set_cnmi(self):
+        self.execute_at_command('cnmiid')
+
+# Delete all SMS mesages sim800L buffer 
+    def del_smss(self):
+        self.execute_at_command('cmgddelsms')
+
+# Set SMS text mode 
+    def set_text_mode(self):
+        sleep(5)
+        self.execute_at_command('cgmfuno')
+        sleep(5)
+        
+# check SM buffer for SMS rcved
+    def check_sms_rcv(self):
+        data = dict()
+        output = self.execute_at_command('cmgllistmsg')
+        #+CMGL: 1,"REC UNREAD","+59169496560","","20/06/15,18:22:02-16"#SD
+        sleep(5)
+        if str(output) == "":
+            data['slot'] = '0'
+            data['code'] = '0'
+            data['sender'] = '0'
+            return data
+        retrieve = self.execute_at_command('cmgrrtrvsms')
+        #print(retrieve)
+        sleep(5)
+        outputSLOT = output.split(',')[0]
+        outputCODE = output.split(',')[5]
+        outputSENDER = output.split(',')[2]
+        data['slot'] = outputSLOT.split(' ')[1]
+        data['code'] = outputCODE.split('#')[1]
+        data['sender'] = outputSENDER[5:13]
+        #print(data)
+        #{'code': 'RG', 'slot': '1', 'sender': '69496560'}
+        self.execute_at_command('cmgddelsms')
+        return data
+
+# Send SMS report
+    def send_sms(self):
+        self.execute_at_command('cgmfuno')
+        sleep(5)
+        self.execute_at_command('atcscs')
+        sleep(5)
+        self.execute_at_command('atcsmp')
+        sleep(5)
+        self.execute_at_command('atcmgs')
+        sleep(5)
+        self.execute_at_command('msg2snd')
+        self.execute_at_command('terminator')      
+        return
+
+
+# Rtreve SMS rcved
+    def get_sms_rcv(self):        
+        sms_received = []
+        self.execute_at_command('cgmfuno')
+        sleep(5)        
+        output = self.execute_at_command('cmgrrtrvsms')
+        pieces = output.split(',')
+        print(output)
+        slot = output[5]
+        #netwrkTIME = output.split(',',1)
+        return slot
 
     def get_ip_addr(self):
         output = self.execute_at_command('getbear')
